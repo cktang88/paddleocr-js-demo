@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Read text from any image — PaddleOCR in your browser</title>
+<style>
+  :root {
+    --bg: #faf9f6;
+    --surface: #ffffff;
+    --ink: #141414;
+    --ink-soft: #5a5a5a;
+    --ink-faint: #8a8a8a;
+    --line: #ebe8e2;
+    --line-soft: #f3f1ec;
+    --accent: #c0392b;
+    --ok: #2a7f3c;
+    --radius: 14px;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 10px 40px rgba(0,0,0,.05);
+    --max: 960px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font: 16px/1.6 ui-sans-serif, -apple-system, BlinkMacSystemFont,
+          "Inter", "Segoe UI", "Helvetica Neue", system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 4rem 1.5rem 5rem; }
+
+  h1 {
+    font-size: clamp(2.125rem, 4.5vw, 3rem);
+    line-height: 1.08;
+    letter-spacing: -0.025em;
+    margin: 0 0 .75rem;
+    font-weight: 700;
+  }
+  .dek {
+    font-size: 1.125rem;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    margin: 0 0 2.75rem;
+    max-width: 38rem;
+  }
+
+  .drop {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 18rem;
+    padding: 3rem 2rem;
+    background: var(--surface);
+    border: 2px dashed var(--line);
+    border-radius: var(--radius);
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .15s ease, background-color .15s ease,
+                transform .15s ease;
+  }
+  .drop:hover, .drop.dragover {
+    border-color: var(--accent);
+    background: #fffbfa;
+  }
+  .drop.dragover { transform: scale(1.005); }
+  .drop svg { margin-bottom: 1rem; color: var(--ink-faint); }
+  .drop-title { font-size: 1.25rem; font-weight: 600; margin: 0 0 .25rem; }
+  .drop-sub   { color: var(--ink-soft); margin: 0; font-size: .95rem; }
+  .drop input { display: none; }
+
+  .status {
+    margin-top: 1rem;
+    padding: .875rem 1.125rem;
+    font-size: .925rem;
+    color: var(--ink-soft);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--line);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+  }
+  .status.err { border-left-color: var(--accent); color: var(--accent); }
+  .status.ok  { border-left-color: var(--ok);     color: var(--ok); }
+  .status.working::before {
+    content: "";
+    width: 14px; height: 14px;
+    border: 2px solid var(--line);
+    border-top-color: var(--ink-soft);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    flex: 0 0 auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+    margin-top: 2.25rem;
+    animation: fade-up .3s ease both;
+  }
+  @media (min-width: 760px) {
+    .split { grid-template-columns: 1.618fr 1fr; }
+    .split.stacked { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .card header {
+    padding: .875rem 1.25rem;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    background: var(--line-soft);
+  }
+  .card h2 {
+    margin: 0;
+    font-size: .72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    color: var(--ink-soft);
+  }
+  .card .meta {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .72rem;
+    color: var(--ink-faint);
+    white-space: nowrap;
+  }
+  .card .body { padding: .5rem 1.25rem; }
+
+  #preview {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--line-soft);
+  }
+
+  .lines { list-style: none; padding: 0; margin: 0; }
+  .lines li {
+    padding: .75rem 0;
+    border-bottom: 1px solid var(--line);
+    font-size: .975rem;
+    line-height: 1.45;
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+  }
+  .lines li:last-child { border-bottom: 0; }
+  .lines .score {
+    flex: 0 0 auto;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .72rem;
+    color: var(--ink-faint);
+    min-width: 2.25em;
+    text-align: right;
+    padding-top: .125rem;
+  }
+  .lines .text { flex: 1 1 auto; word-break: break-word; }
+
+  .empty {
+    color: var(--ink-faint);
+    font-size: .95rem;
+    text-align: center;
+    padding: 2.5rem 0;
+  }
+
+  footer {
+    margin-top: 4rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--line);
+    font-size: .825rem;
+    color: var(--ink-faint);
+  }
+  footer a { color: var(--ink-soft); text-decoration: none; border-bottom: 1px solid var(--line); }
+  footer a:hover { color: var(--ink); border-color: var(--ink-soft); }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1>Read text from any image.</h1>
+  <p class="dek">
+    Drop an image to extract its text. Runs entirely in your browser with
+    PaddleOCR — your file never leaves this device.
+  </p>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="image/*" />
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+         stroke-linejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="17 8 12 3 7 8"/>
+      <line x1="12" y1="3" x2="12" y2="15"/>
+    </svg>
+    <p class="drop-title">Drop an image or click to choose</p>
+    <p class="drop-sub">JPG, PNG, WebP, GIF, BMP &middot; stays on your device</p>
+  </label>
+
+  <div class="status working" id="status">Starting OCR engine…</div>
+
+  <section class="split hidden" id="results">
+    <div class="card">
+      <header>
+        <h2>Image</h2>
+        <span class="meta" id="imgMeta"></span>
+      </header>
+      <img id="preview" alt="" />
+    </div>
+    <div class="card">
+      <header>
+        <h2>Recognized text</h2>
+        <span class="meta" id="metrics"></span>
+      </header>
+      <div class="body">
+        <ol class="lines" id="lines"></ol>
+        <div class="empty hidden" id="empty">No text detected.</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Built on
+    <a href="https://github.com/PaddlePaddle/PaddleOCR/tree/main/paddleocr-js"
+       target="_blank" rel="noopener">@paddleocr/paddleocr-js</a>,
+    <a href="https://onnxruntime.ai/" target="_blank" rel="noopener">ONNX Runtime Web</a>,
+    and <a href="https://opencv.org/" target="_blank" rel="noopener">OpenCV.js</a>.
+  </footer>
+</main>
+
+<!-- Load OpenCV UMD globally (sets window.cv). Neither jsDelivr +esm nor
+     esm.sh can serve @techstark/opencv-js cleanly, so we host it ourselves
+     and shim the package via the import map below. -->
+<script src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js"></script>
+
+<script type="importmap">
+{
+  "imports": {
+    "@techstark/opencv-js": "data:text/javascript,export default globalThis.cv"
+  }
+}
+</script>
+
+<script type="module">
+// ?external=@techstark/opencv-js makes esm.sh emit a bare import of
+// "@techstark/opencv-js" inside its bundle, which the import map above
+// resolves to the UMD global loaded by the <script> tag.
+import { PaddleOCR }
+  from "https://esm.sh/@paddleocr/paddleocr-js@0.3.2?external=@techstark/opencv-js";
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status");
+const setStatus = (msg, kind = "") => {
+  statusEl.textContent = msg;
+  statusEl.className = "status" + (kind ? " " + kind : "");
+};
+
+let ocr = null;
+let ready = false;
+let pendingFile = null;
+
+async function init() {
+  try {
+    ocr = await PaddleOCR.create({
+      lang: "ch",
+      ocrVersion: "PP-OCRv5",
+      worker: false,
+      ortOptions: {
+        backend: "wasm",
+        wasmPaths: "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/",
+        simd: true,
+      },
+    });
+    ready = true;
+    if (pendingFile) { const f = pendingFile; pendingFile = null; run(f); }
+    else { setStatus("Ready. Drop an image to read its text.", "ok"); }
+  } catch (e) {
+    console.error(e);
+    setStatus(`Init failed: ${e.message}`, "err");
+  }
+}
+
+async function run(file) {
+  try {
+    setStatus(`Reading “${file.name}”…`, "working");
+    const [result] = await ocr.predict(file);
+    renderResult(file, result);
+    const m = result.metrics;
+    setStatus(
+      `Done in ${(m.totalMs / 1000).toFixed(1)}s · ` +
+      `${m.recognizedCount} line${m.recognizedCount === 1 ? "" : "s"} recognized`,
+      "ok"
+    );
+  } catch (e) {
+    console.error(e);
+    setStatus(`OCR failed: ${e.message}`, "err");
+  }
+}
+
+function renderResult(file, result) {
+  const results = $("results");
+  results.classList.remove("hidden");
+  results.classList.toggle("stacked", result.items.length > 10);
+  const img = $("preview");
+  if (img.src.startsWith("blob:")) URL.revokeObjectURL(img.src);
+  img.src = URL.createObjectURL(file);
+  $("imgMeta").textContent = `${result.image.width} × ${result.image.height}`;
+  const m = result.metrics;
+  $("metrics").textContent =
+    `det ${Math.round(m.detMs)}ms · rec ${Math.round(m.recMs)}ms`;
+
+  const list = $("lines");
+  list.innerHTML = "";
+  if (result.items.length === 0) {
+    $("empty").classList.remove("hidden");
+    return;
+  }
+  $("empty").classList.add("hidden");
+  for (const it of result.items) {
+    const li = document.createElement("li");
+    const score = document.createElement("span");
+    score.className = "score";
+    score.textContent = it.score.toFixed(2);
+    const text = document.createElement("span");
+    text.className = "text";
+    text.textContent = it.text;
+    li.append(score, text);
+    list.appendChild(li);
+  }
+}
+
+function handleFile(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  if (!ready) {
+    pendingFile = file;
+    setStatus(`Loading models — will read “${file.name}” as soon as ready…`, "working");
+    return;
+  }
+  run(file);
+}
+
+$("file").addEventListener("change", (e) => handleFile(e.target.files?.[0]));
+
+const drop = $("drop");
+["dragenter", "dragover"].forEach((ev) =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("dragover"); })
+);
+["dragleave", "drop"].forEach((ev) =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("dragover"); })
+);
+drop.addEventListener("drop", (e) => handleFile(e.dataTransfer.files?.[0]));
+
+init();
+</script>
+</body>
+</html>

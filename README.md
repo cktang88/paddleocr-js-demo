@@ -1,4 +1,4 @@
-# paddleocr-js-test
+# paddleocr-js-demo
 
 A single-file HTML demo that runs [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (PP-OCRv5) entirely in your browser — no server, no upload, your image never leaves the device.
 

@@ -1,8 +1,8 @@
 # paddleocr-js-demo
 
-A single-file HTML demo that runs [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (PP-OCRv5) entirely in your browser — no server, no upload, your image never leaves the device.
+A single-file HTML demo that reads text from just about any file — images, HEIC photos, PDFs, and Office documents (DOCX / XLSX / PPTX) — entirely in your browser. No server, no upload, your file never leaves the device.
 
-Powered by [`@paddleocr/paddleocr-js`](https://github.com/PaddlePaddle/PaddleOCR/tree/main/paddleocr-js), ONNX Runtime Web, and OpenCV.js.
+Images, HEIC photos, and PDF pages go through [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (PP-OCRv5). Office documents read their native text directly; no OCR needed.
 
 ## Run it
 
@@ -18,9 +18,18 @@ Any static server works: `npx serve`, `php -S localhost:8000`, VS Code's Live Se
 
 ## How it works
 
-- Engine auto-initializes on page load (downloads ~10 MB of PP-OCRv5 mobile detection + recognition models, cached by the browser).
-- Drop a JPG/PNG/WebP/GIF/BMP on the drop zone (or click to pick).
-- OCR runs automatically. Results show alongside the image (side-by-side for ≤10 lines, stacked below for more).
+The engine auto-initializes on page load (downloads ~10 MB of PP-OCRv5 mobile models, cached by the browser). Drop a file and it routes by type:
+
+| File | Pipeline |
+| --- | --- |
+| JPG / PNG / WebP / GIF / BMP / TIFF | PaddleOCR directly |
+| HEIC / HEIF | [heic2any](https://github.com/alexcorvi/heic2any) → PNG → PaddleOCR |
+| PDF | [PDF.js](https://mozilla.github.io/pdf.js/) rasterizes each page → PaddleOCR per page |
+| DOCX | [mammoth.js](https://github.com/mwilliamson/mammoth.js) extracts raw text |
+| XLSX | [SheetJS](https://sheetjs.com/) exports each sheet as CSV |
+| PPTX | [JSZip](https://stuk.github.io/jszip/) unpacks slides, DOMParser pulls `<a:t>` runs |
+
+Heavy libraries (PDF.js, mammoth, SheetJS, JSZip, heic2any) load lazily the first time you drop a matching file — the base page stays small.
 
 ## CDN wiring (why it looks unusual)
 
@@ -30,6 +39,10 @@ Any static server works: `npx serve`, `php -S localhost:8000`, VS Code's Live Se
 2. Uses an import map to shim `@techstark/opencv-js` → a data-URL module that re-exports `globalThis.cv` as default.
 3. Loads the SDK from esm.sh with `?external=@techstark/opencv-js` so it emits a bare import the map can intercept.
 
+The other libraries come from esm.sh and jsDelivr without special handling.
+
 ## Limitations
 
-PaddleOCR.js only accepts raster images the browser can decode (`createImageBitmap`). No PDF, no DOCX, no multi-page TIFF. For PDFs you'd rasterize pages with PDF.js first and call `ocr.predict(canvas)` per page.
+- **Office fidelity** is text-only — embedded images are not OCR'd, and layout/styling is dropped. If you need LibreOffice-grade rendering you'd have to fall back to a server or [ZetaOffice](https://zetaoffice.net/) (WASM LibreOffice, ~1 GB).
+- **PDFs with scanned-only pages** are fine — they'll OCR page-by-page. Native-text PDFs also go through OCR rather than PDF.js's text layer, so selectable PDFs are slower than they'd need to be. Worth switching to PDF.js `getTextContent()` when the page has a text layer; skipped for now to keep the demo simple.
+- **PaddleOCR.js** accepts `ImageBitmap | Blob | HTMLCanvasElement | ImageData | HTMLImageElement`; anything we can't decode via `createImageBitmap` gets converted first (that's what HEIC does).

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Read text from any image — PaddleOCR in your browser</title>
+<title>Read text from any file — PaddleOCR in your browser</title>
 <style>
   :root {
     --bg: #faf9f6;
@@ -103,12 +103,12 @@
     to   { opacity: 1; transform: none; }
   }
 
+  #results { margin-top: 2.25rem; animation: fade-up .3s ease both; }
+
   .split {
     display: grid;
     grid-template-columns: 1fr;
     gap: 1.5rem;
-    margin-top: 2.25rem;
-    animation: fade-up .3s ease both;
   }
   @media (min-width: 760px) {
     .split { grid-template-columns: 1.618fr 1fr; }
@@ -122,6 +122,7 @@
     overflow: hidden;
     box-shadow: var(--shadow);
   }
+  .card + .card { margin-top: 1.5rem; }
   .card header {
     padding: .875rem 1.25rem;
     border-bottom: 1px solid var(--line);
@@ -146,12 +147,39 @@
     white-space: nowrap;
   }
   .card .body { padding: .5rem 1.25rem; }
+  .card .body.plain { padding: 1.25rem; }
 
-  #preview {
+  .preview-img, .preview-canvas {
     display: block;
     width: 100%;
     height: auto;
     background: var(--line-soft);
+  }
+  .preview-canvas + .preview-canvas { border-top: 1px solid var(--line); }
+
+  .file-info {
+    padding: 2rem 1.5rem;
+    background: var(--line-soft);
+    text-align: center;
+    color: var(--ink-soft);
+  }
+  .file-info .ext {
+    display: inline-block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .72rem;
+    padding: .25rem .625rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--ink);
+    margin-bottom: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+  .file-info .name {
+    font-size: .95rem;
+    color: var(--ink);
+    word-break: break-all;
   }
 
   .lines { list-style: none; padding: 0; margin: 0; }
@@ -165,6 +193,9 @@
     align-items: baseline;
   }
   .lines li:last-child { border-bottom: 0; }
+  .lines li.low { display: none; }
+  .lines.show-low li.low { display: flex; }
+  .lines li.low .score { color: var(--accent); }
   .lines .score {
     flex: 0 0 auto;
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -175,6 +206,61 @@
     padding-top: .125rem;
   }
   .lines .text { flex: 1 1 auto; word-break: break-word; }
+
+  .ocr-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: .75rem;
+    padding: .75rem 0;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .btn {
+    font: inherit;
+    font-size: .825rem;
+    padding: .375rem .75rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink);
+    cursor: pointer;
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+  }
+  .btn:hover { border-color: var(--ink-soft); background: var(--line-soft); }
+  .btn:active { transform: translateY(1px); }
+  .btn.copied { color: var(--ok); border-color: var(--ok); background: #f4faf5; }
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    font-size: .85rem;
+    color: var(--ink-soft);
+    cursor: pointer;
+    user-select: none;
+  }
+  .toggle input { margin: 0; accent-color: var(--ink); }
+
+  .section-label {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    color: var(--ink-faint);
+    padding: 1rem 0 .5rem;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: .25rem;
+  }
+  .section-label:first-child { padding-top: .25rem; }
+
+  pre.doc {
+    margin: 0;
+    padding: 0;
+    font: inherit;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--ink);
+  }
 
   .empty {
     color: var(--ink-faint);
@@ -198,14 +284,16 @@
 </head>
 <body>
 <main class="wrap">
-  <h1>Read text from any image.</h1>
+  <h1>Read text from any file.</h1>
   <p class="dek">
-    Drop an image to extract its text. Runs entirely in your browser with
-    PaddleOCR — your file never leaves this device.
+    Drop a file to extract its text. Images and PDFs go through PaddleOCR;
+    Office documents read their native text. Everything runs in your browser —
+    your file never leaves this device.
   </p>
 
   <label class="drop" id="drop">
-    <input type="file" id="file" accept="image/*" />
+    <input type="file" id="file"
+      accept="image/*,.heic,.heif,.pdf,.docx,.xlsx,.pptx" />
     <svg width="36" height="36" viewBox="0 0 24 24" fill="none"
          stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
          stroke-linejoin="round" aria-hidden="true">
@@ -213,44 +301,28 @@
       <polyline points="17 8 12 3 7 8"/>
       <line x1="12" y1="3" x2="12" y2="15"/>
     </svg>
-    <p class="drop-title">Drop an image or click to choose</p>
-    <p class="drop-sub">JPG, PNG, WebP, GIF, BMP &middot; stays on your device</p>
+    <p class="drop-title">Drop a file or click to choose</p>
+    <p class="drop-sub">Images (incl. HEIC) &middot; PDF &middot; DOCX &middot; XLSX &middot; PPTX</p>
   </label>
 
   <div class="status working" id="status">Starting OCR engine…</div>
 
-  <section class="split hidden" id="results">
-    <div class="card">
-      <header>
-        <h2>Image</h2>
-        <span class="meta" id="imgMeta"></span>
-      </header>
-      <img id="preview" alt="" />
-    </div>
-    <div class="card">
-      <header>
-        <h2>Recognized text</h2>
-        <span class="meta" id="metrics"></span>
-      </header>
-      <div class="body">
-        <ol class="lines" id="lines"></ol>
-        <div class="empty hidden" id="empty">No text detected.</div>
-      </div>
-    </div>
-  </section>
+  <section id="results" class="hidden"></section>
 
   <footer>
     Built on
     <a href="https://github.com/PaddlePaddle/PaddleOCR/tree/main/paddleocr-js"
        target="_blank" rel="noopener">@paddleocr/paddleocr-js</a>,
-    <a href="https://onnxruntime.ai/" target="_blank" rel="noopener">ONNX Runtime Web</a>,
-    and <a href="https://opencv.org/" target="_blank" rel="noopener">OpenCV.js</a>.
+    <a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noopener">PDF.js</a>,
+    <a href="https://github.com/mwilliamson/mammoth.js" target="_blank" rel="noopener">mammoth.js</a>,
+    <a href="https://sheetjs.com/" target="_blank" rel="noopener">SheetJS</a>,
+    and <a href="https://github.com/alexcorvi/heic2any" target="_blank" rel="noopener">heic2any</a>.
   </footer>
 </main>
 
-<!-- Load OpenCV UMD globally (sets window.cv). Neither jsDelivr +esm nor
-     esm.sh can serve @techstark/opencv-js cleanly, so we host it ourselves
-     and shim the package via the import map below. -->
+<!-- OpenCV UMD (sets window.cv). Neither jsDelivr +esm nor esm.sh can serve
+     @techstark/opencv-js cleanly, so we host it ourselves and shim the
+     package via the import map below. -->
 <script src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js"></script>
 
 <script type="importmap">
@@ -268,8 +340,12 @@
 import { PaddleOCR }
   from "https://esm.sh/@paddleocr/paddleocr-js@0.3.2?external=@techstark/opencv-js";
 
+const PDFJS_VER = "4.10.38";
+const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VER}/build/`;
+
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
+const resultsEl = $("results");
 const setStatus = (msg, kind = "") => {
   statusEl.textContent = msg;
   statusEl.className = "status" + (kind ? " " + kind : "");
@@ -293,67 +369,287 @@ async function init() {
     });
     ready = true;
     if (pendingFile) { const f = pendingFile; pendingFile = null; run(f); }
-    else { setStatus("Ready. Drop an image to read its text.", "ok"); }
+    else { setStatus("Ready. Drop a file to read its text.", "ok"); }
   } catch (e) {
     console.error(e);
     setStatus(`Init failed: ${e.message}`, "err");
   }
 }
 
+// --- File type detection ----------------------------------------------------
+
+function detectKind(file) {
+  const name = file.name.toLowerCase();
+  const mime = (file.type || "").toLowerCase();
+  if (name.endsWith(".heic") || name.endsWith(".heif")
+      || mime === "image/heic" || mime === "image/heif") return "heic";
+  if (name.endsWith(".pdf") || mime === "application/pdf") return "pdf";
+  if (name.endsWith(".docx")) return "docx";
+  if (name.endsWith(".xlsx")) return "xlsx";
+  if (name.endsWith(".pptx")) return "pptx";
+  if (mime.startsWith("image/")
+      || /\.(png|jpe?g|webp|gif|bmp|tiff?)$/.test(name)) return "image";
+  return null;
+}
+
+// --- Lazy loaders for heavy libraries --------------------------------------
+
+let _pdfjs = null;
+async function loadPdfjs() {
+  if (_pdfjs) return _pdfjs;
+  const mod = await import(`${PDFJS_BASE}pdf.min.mjs`);
+  mod.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}pdf.worker.min.mjs`;
+  _pdfjs = mod;
+  return mod;
+}
+const loadMammoth  = () => import("https://esm.sh/mammoth@1.12.0");
+const loadXlsx     = () => import("https://esm.sh/xlsx@0.18.5");
+const loadJszip    = () => import("https://esm.sh/jszip@3.10.1");
+const loadHeic2any = () => import("https://esm.sh/heic2any@0.0.4");
+
+// --- Dispatcher -------------------------------------------------------------
+
 async function run(file) {
+  resultsEl.classList.add("hidden");
+  resultsEl.innerHTML = "";
   try {
-    setStatus(`Reading “${file.name}”…`, "working");
-    const [result] = await ocr.predict(file);
-    renderResult(file, result);
-    const m = result.metrics;
-    setStatus(
-      `Done in ${(m.totalMs / 1000).toFixed(1)}s · ` +
-      `${m.recognizedCount} line${m.recognizedCount === 1 ? "" : "s"} recognized`,
-      "ok"
-    );
+    const kind = detectKind(file);
+    if (!kind) throw new Error(`Unsupported file type: ${file.type || file.name}`);
+    const started = performance.now();
+    switch (kind) {
+      case "image": await runImage(file); break;
+      case "heic":  await runHeic(file);  break;
+      case "pdf":   await runPdf(file);   break;
+      case "docx":  await runDocx(file);  break;
+      case "xlsx":  await runXlsx(file);  break;
+      case "pptx":  await runPptx(file);  break;
+    }
+    resultsEl.classList.remove("hidden");
+    const secs = ((performance.now() - started) / 1000).toFixed(1);
+    setStatus(`Done in ${secs}s · ${file.name}`, "ok");
   } catch (e) {
     console.error(e);
-    setStatus(`OCR failed: ${e.message}`, "err");
+    setStatus(`Failed: ${e.message}`, "err");
   }
 }
 
-function renderResult(file, result) {
-  const results = $("results");
-  results.classList.remove("hidden");
-  results.classList.toggle("stacked", result.items.length > 10);
-  const img = $("preview");
-  if (img.src.startsWith("blob:")) URL.revokeObjectURL(img.src);
-  img.src = URL.createObjectURL(file);
-  $("imgMeta").textContent = `${result.image.width} × ${result.image.height}`;
+// --- Handlers ---------------------------------------------------------------
+
+async function runImage(file) {
+  setStatus(`Reading "${file.name}"…`, "working");
+  const [result] = await ocr.predict(file);
+  renderOcrCard(file, URL.createObjectURL(file), result);
+}
+
+async function runHeic(file) {
+  setStatus(`Decoding "${file.name}"…`, "working");
+  const { default: heic2any } = await loadHeic2any();
+  const converted = await heic2any({ blob: file, toType: "image/png" });
+  // heic2any may return a Blob or an array of Blobs (multi-image HEIC)
+  const blob = Array.isArray(converted) ? converted[0] : converted;
+  setStatus(`Reading "${file.name}"…`, "working");
+  const [result] = await ocr.predict(blob);
+  renderOcrCard(file, URL.createObjectURL(blob), result);
+}
+
+async function runPdf(file) {
+  const pdfjs = await loadPdfjs();
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjs.getDocument({ data: buf }).promise;
+  const total = pdf.numPages;
+  for (let i = 1; i <= total; i++) {
+    setStatus(`Rendering page ${i} of ${total}…`, "working");
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale: 2.0 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    canvas.className = "preview-canvas";
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    setStatus(`OCR page ${i} of ${total}…`, "working");
+    const [result] = await ocr.predict(canvas);
+    renderOcrCard(
+      file, null, result,
+      { title: `Page ${i} / ${total}`, canvas }
+    );
+  }
+}
+
+async function runDocx(file) {
+  setStatus(`Extracting "${file.name}"…`, "working");
+  const mammoth = (await loadMammoth()).default ?? await loadMammoth();
+  const { value: text } = await mammoth.extractRawText({
+    arrayBuffer: await file.arrayBuffer(),
+  });
+  renderTextCard(file, "DOCX", [{ label: "Document", text }]);
+}
+
+async function runXlsx(file) {
+  setStatus(`Extracting "${file.name}"…`, "working");
+  const XLSX = await loadXlsx();
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const sections = wb.SheetNames.map((name) => ({
+    label: name,
+    text: XLSX.utils.sheet_to_csv(wb.Sheets[name]).trimEnd(),
+  }));
+  renderTextCard(file, "XLSX", sections);
+}
+
+async function runPptx(file) {
+  setStatus(`Extracting "${file.name}"…`, "working");
+  const JSZip = (await loadJszip()).default ?? await loadJszip();
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const slidePaths = Object.keys(zip.files)
+    .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .sort((a, b) => (+a.match(/\d+/)[0]) - (+b.match(/\d+/)[0]));
+  const sections = [];
+  for (const path of slidePaths) {
+    const xml = await zip.file(path).async("string");
+    const doc = new DOMParser().parseFromString(xml, "application/xml");
+    // <a:t> holds run text; <a:p> marks paragraphs. Emit one line per paragraph.
+    const paras = doc.getElementsByTagName("a:p");
+    const lines = [];
+    for (const p of paras) {
+      const text = Array.from(p.getElementsByTagName("a:t"))
+        .map((t) => t.textContent).join("");
+      if (text.trim()) lines.push(text);
+    }
+    sections.push({
+      label: `Slide ${path.match(/slide(\d+)/)[1]}`,
+      text: lines.join("\n"),
+    });
+  }
+  renderTextCard(file, "PPTX", sections);
+}
+
+// --- Rendering --------------------------------------------------------------
+
+function renderOcrCard(file, previewUrl, result, opts = {}) {
+  const { title = "Source", canvas = null } = opts;
+
+  const split = document.createElement("div");
+  split.className = "split" + (result.items.length > 10 ? " stacked" : "");
+
+  // Source card (image or canvas)
+  const srcCard = document.createElement("div");
+  srcCard.className = "card";
+  const srcHeader = document.createElement("header");
+  srcHeader.innerHTML =
+    `<h2>${title}</h2>` +
+    `<span class="meta">${result.image.width} × ${result.image.height}</span>`;
+  srcCard.append(srcHeader);
+  if (canvas) {
+    srcCard.append(canvas);
+  } else if (previewUrl) {
+    const img = document.createElement("img");
+    img.className = "preview-img";
+    img.alt = "";
+    img.src = previewUrl;
+    srcCard.append(img);
+  }
+  split.append(srcCard);
+
+  // Recognized-text card
+  const ocrCard = document.createElement("div");
+  ocrCard.className = "card";
   const m = result.metrics;
-  $("metrics").textContent =
-    `det ${Math.round(m.detMs)}ms · rec ${Math.round(m.recMs)}ms`;
-
-  const list = $("lines");
-  list.innerHTML = "";
+  ocrCard.innerHTML =
+    `<header>` +
+      `<h2>Recognized text</h2>` +
+      `<span class="meta">det ${Math.round(m.detMs)}ms · ` +
+      `rec ${Math.round(m.recMs)}ms</span>` +
+    `</header>` +
+    `<div class="body"></div>`;
+  const body = ocrCard.querySelector(".body");
   if (result.items.length === 0) {
-    $("empty").classList.remove("hidden");
-    return;
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No text detected.";
+    body.append(empty);
+  } else {
+    const list = document.createElement("ol");
+    list.className = "lines";
+    for (const it of result.items) {
+      const li = document.createElement("li");
+      const score = document.createElement("span");
+      score.className = "score";
+      score.textContent = it.score.toFixed(2);
+      const text = document.createElement("span");
+      text.className = "text";
+      text.textContent = it.text;
+      li.append(score, text);
+      list.append(li);
+    }
+    body.append(list);
   }
-  $("empty").classList.add("hidden");
-  for (const it of result.items) {
-    const li = document.createElement("li");
-    const score = document.createElement("span");
-    score.className = "score";
-    score.textContent = it.score.toFixed(2);
-    const text = document.createElement("span");
-    text.className = "text";
-    text.textContent = it.text;
-    li.append(score, text);
-    list.appendChild(li);
-  }
+  split.append(ocrCard);
+
+  resultsEl.append(split);
 }
+
+function renderTextCard(file, kindLabel, sections) {
+  const info = document.createElement("div");
+  info.className = "card";
+  info.innerHTML =
+    `<header><h2>Source</h2>` +
+    `<span class="meta">${(file.size / 1024).toFixed(0)} KB</span></header>` +
+    `<div class="file-info">` +
+      `<div class="ext">${kindLabel}</div>` +
+      `<div class="name">${escapeHtml(file.name)}</div>` +
+    `</div>`;
+  resultsEl.append(info);
+
+  const card = document.createElement("div");
+  card.className = "card";
+  const totalLen = sections.reduce((n, s) => n + s.text.length, 0);
+  card.innerHTML =
+    `<header><h2>Extracted text</h2>` +
+    `<span class="meta">${sections.length} section${sections.length === 1 ? "" : "s"} · ` +
+    `${totalLen.toLocaleString()} chars</span></header>` +
+    `<div class="body plain"></div>`;
+  const body = card.querySelector(".body");
+  if (totalLen === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No text found.";
+    body.append(empty);
+  } else {
+    for (const section of sections) {
+      if (!section.text.trim()) continue;
+      if (sections.length > 1) {
+        const label = document.createElement("div");
+        label.className = "section-label";
+        label.textContent = section.label;
+        body.append(label);
+      }
+      const pre = document.createElement("pre");
+      pre.className = "doc";
+      pre.textContent = section.text;
+      body.append(pre);
+    }
+  }
+  resultsEl.append(card);
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// --- Input wiring -----------------------------------------------------------
 
 function handleFile(file) {
-  if (!file || !file.type.startsWith("image/")) return;
-  if (!ready) {
+  if (!file) return;
+  const kind = detectKind(file);
+  if (!kind) {
+    setStatus(`Unsupported file: ${file.name}`, "err");
+    return;
+  }
+  const needsOcr = kind === "image" || kind === "heic" || kind === "pdf";
+  if (needsOcr && !ready) {
     pendingFile = file;
-    setStatus(`Loading models — will read “${file.name}” as soon as ready…`, "working");
+    setStatus(`Loading models — will read "${file.name}" as soon as ready…`, "working");
     return;
   }
   run(file);

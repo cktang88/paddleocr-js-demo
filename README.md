@@ -31,6 +31,12 @@ The engine auto-initializes on page load (downloads ~10 MB of PP-OCRv5 mobile mo
 
 Heavy libraries (PDF.js, mammoth, SheetJS, JSZip, heic2any) load lazily the first time you drop a matching file — the base page stays small.
 
+## Reading the results
+
+- **Copy all** — one click copies the visible recognized text to the clipboard, newline-separated.
+- **Low-confidence filter** — rows with PaddleOCR score `< 0.5` are hidden by default (they're usually noise). If any were hidden, a `Show N low-confidence rows` toggle appears beside the copy button.
+- **Transcribe with VLM** — when the image is a photo/scene rather than a clean document, PaddleOCR can struggle. Pick a small vision-language model from the dropdown and click the button to re-transcribe the same image with [SmolVLM](https://huggingface.co/HuggingFaceTB/SmolVLM-256M-Instruct) via [Transformers.js](https://github.com/huggingface/transformers.js). Runs on WebGPU where available, falls back to WASM. Model weights download on first use (~180 MB for SmolVLM-256M, ~500 MB for SmolVLM-500M) and are cached by the browser.
+
 ## CDN wiring (why it looks unusual)
 
 `@paddleocr/paddleocr-js` is published as pure ESM and depends on `@techstark/opencv-js`, which no generic CDN can serve as browser-ESM (jsDelivr's `+esm` errors on the `fs` import; esm.sh force-injects Node polyfills that crash on `process.binding`). So the page:

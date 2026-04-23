@@ -241,6 +241,87 @@
   }
   .toggle input { margin: 0; accent-color: var(--ink); }
 
+  .vlm-section {
+    border-top: 1px solid var(--line);
+    margin-top: .25rem;
+    padding: .875rem 0 .25rem;
+  }
+  .vlm-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+  }
+  .vlm-title {
+    font-size: .875rem;
+    color: var(--ink);
+    font-weight: 500;
+  }
+  .vlm-title small {
+    display: block;
+    font-weight: 400;
+    font-size: .75rem;
+    color: var(--ink-faint);
+    margin-top: .125rem;
+  }
+  .vlm-controls { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .vlm-select {
+    font: inherit;
+    font-size: .825rem;
+    padding: .375rem .5rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink);
+    cursor: pointer;
+  }
+  .vlm-status {
+    margin-top: .625rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .72rem;
+    color: var(--ink-soft);
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+  }
+  .vlm-status.err { color: var(--accent); }
+  .vlm-status.working::before {
+    content: "";
+    width: 10px; height: 10px;
+    border: 2px solid var(--line);
+    border-top-color: var(--ink-soft);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    flex: 0 0 auto;
+  }
+  .vlm-output { margin-top: .75rem; }
+  .vlm-output-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: .5rem;
+  }
+  .vlm-output-header .label {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    color: var(--ink-faint);
+  }
+  .vlm-output pre {
+    margin: 0;
+    padding: .75rem .875rem;
+    background: var(--line-soft);
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font: inherit;
+    font-size: .925rem;
+    color: var(--ink);
+    min-height: 1.5em;
+  }
+
   .section-label {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
     font-size: .72rem;
@@ -343,6 +424,11 @@ import { PaddleOCR }
 const PDFJS_VER = "4.10.38";
 const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VER}/build/`;
 
+// Rows with a recognition score below this are hidden behind a toggle.
+// PP-OCRv5 tends to emit a few very low-confidence fragments per page (noise,
+// partial glyphs, stray shapes) that distract from the real text.
+const LOW_CONFIDENCE = 0.5;
+
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
 const resultsEl = $("results");
@@ -407,6 +493,92 @@ const loadXlsx     = () => import("https://esm.sh/xlsx@0.18.5");
 const loadJszip    = () => import("https://esm.sh/jszip@3.10.1");
 const loadHeic2any = () => import("https://esm.sh/heic2any@0.0.4");
 
+// --- Vision-language model (SmolVLM via transformers.js) -------------------
+
+const TRANSFORMERS_VER = "3.8.1";
+let _transformersPromise = null;
+const loadTransformers = () => (_transformersPromise ??=
+  import(`https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VER}`));
+
+// dtype differs by backend: WebGPU runs fp32/fp16 fast; WASM needs q8 to fit.
+const VLM_MODELS = [
+  {
+    id: "HuggingFaceTB/SmolVLM-256M-Instruct",
+    label: "SmolVLM-256M · fastest (~180 MB)",
+    webgpu: "fp32",
+    wasm: "q8",
+  },
+  {
+    id: "HuggingFaceTB/SmolVLM-500M-Instruct",
+    label: "SmolVLM-500M · better (~500 MB, q4)",
+    webgpu: "q4",
+    wasm: "q4",
+  },
+];
+
+const VLM_PROMPT =
+  "Transcribe all text visible in this image exactly as it appears, " +
+  "preserving line breaks and reading order. Output only the transcribed " +
+  "text with no introduction, commentary, or explanation.";
+
+const _vlmCache = new Map(); // key: `${modelId}:${dtype}` -> { processor, model }
+
+async function loadVlm(modelId, dtype, device, onProgress) {
+  const key = `${modelId}:${dtype}:${device}`;
+  if (_vlmCache.has(key)) return _vlmCache.get(key);
+  const { AutoProcessor, AutoModelForVision2Seq } = await loadTransformers();
+  const [processor, model] = await Promise.all([
+    AutoProcessor.from_pretrained(modelId, { progress_callback: onProgress }),
+    AutoModelForVision2Seq.from_pretrained(modelId, {
+      dtype, device,
+      progress_callback: onProgress,
+    }),
+  ]);
+  const entry = { processor, model };
+  _vlmCache.set(key, entry);
+  return entry;
+}
+
+async function imageSourceToRawImage(imageSource, RawImage) {
+  if (imageSource instanceof HTMLCanvasElement) {
+    const blob = await new Promise((r) => imageSource.toBlob(r, "image/png"));
+    return RawImage.fromBlob(blob);
+  }
+  return RawImage.fromBlob(imageSource);
+}
+
+async function vlmTranscribe({ imageSource, modelId, dtype, device,
+                               onProgress, onToken }) {
+  const { processor, model } = await loadVlm(modelId, dtype, device, onProgress);
+  const { RawImage, TextStreamer } = await loadTransformers();
+  const image = await imageSourceToRawImage(imageSource, RawImage);
+
+  const messages = [{
+    role: "user",
+    content: [{ type: "image" }, { type: "text", text: VLM_PROMPT }],
+  }];
+  const promptText = processor.apply_chat_template(messages, {
+    add_generation_prompt: true,
+  });
+  const inputs = await processor(promptText, [image]);
+
+  let output = "";
+  const streamer = new TextStreamer(processor.tokenizer, {
+    skip_prompt: true,
+    skip_special_tokens: true,
+    callback_function: (tok) => { output += tok; onToken?.(output); },
+  });
+
+  await model.generate({
+    ...inputs,
+    do_sample: false,
+    repetition_penalty: 1.1,
+    max_new_tokens: 1024,
+    streamer,
+  });
+  return output.trim();
+}
+
 // --- Dispatcher -------------------------------------------------------------
 
 async function run(file) {
@@ -438,7 +610,7 @@ async function run(file) {
 async function runImage(file) {
   setStatus(`Reading "${file.name}"…`, "working");
   const [result] = await ocr.predict(file);
-  renderOcrCard(file, URL.createObjectURL(file), result);
+  renderOcrCard(file, URL.createObjectURL(file), result, { imageSource: file });
 }
 
 async function runHeic(file) {
@@ -449,7 +621,7 @@ async function runHeic(file) {
   const blob = Array.isArray(converted) ? converted[0] : converted;
   setStatus(`Reading "${file.name}"…`, "working");
   const [result] = await ocr.predict(blob);
-  renderOcrCard(file, URL.createObjectURL(blob), result);
+  renderOcrCard(file, URL.createObjectURL(blob), result, { imageSource: blob });
 }
 
 async function runPdf(file) {
@@ -471,7 +643,7 @@ async function runPdf(file) {
     const [result] = await ocr.predict(canvas);
     renderOcrCard(
       file, null, result,
-      { title: `Page ${i} / ${total}`, canvas }
+      { title: `Page ${i} / ${total}`, canvas, imageSource: canvas }
     );
   }
 }
@@ -526,7 +698,7 @@ async function runPptx(file) {
 // --- Rendering --------------------------------------------------------------
 
 function renderOcrCard(file, previewUrl, result, opts = {}) {
-  const { title = "Source", canvas = null } = opts;
+  const { title = "Source", canvas = null, imageSource = null } = opts;
 
   const split = document.createElement("div");
   split.className = "split" + (result.items.length > 10 ? " stacked" : "");
@@ -570,8 +742,10 @@ function renderOcrCard(file, previewUrl, result, opts = {}) {
   } else {
     const list = document.createElement("ol");
     list.className = "lines";
+    let lowCount = 0;
     for (const it of result.items) {
       const li = document.createElement("li");
+      if (it.score < LOW_CONFIDENCE) { li.classList.add("low"); lowCount++; }
       const score = document.createElement("span");
       score.className = "score";
       score.textContent = it.score.toFixed(2);
@@ -581,11 +755,187 @@ function renderOcrCard(file, previewUrl, result, opts = {}) {
       li.append(score, text);
       list.append(li);
     }
+    body.append(buildOcrControls(list, result.items, lowCount));
     body.append(list);
   }
+  if (imageSource) body.append(buildVlmSection(imageSource));
   split.append(ocrCard);
 
   resultsEl.append(split);
+}
+
+function buildOcrControls(list, items, lowCount) {
+  const bar = document.createElement("div");
+  bar.className = "ocr-controls";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "btn";
+  copyBtn.textContent = "Copy all";
+  copyBtn.addEventListener("click", async () => {
+    const visible = items.filter((it) =>
+      list.classList.contains("show-low") || it.score >= LOW_CONFIDENCE
+    );
+    const text = visible.map((it) => it.text).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      copyBtn.classList.add("copied");
+      copyBtn.textContent = `Copied ${visible.length} line${visible.length === 1 ? "" : "s"}`;
+      setTimeout(() => {
+        copyBtn.classList.remove("copied");
+        copyBtn.textContent = "Copy all";
+      }, 1500);
+    } catch (e) {
+      copyBtn.textContent = "Copy failed";
+      setTimeout(() => { copyBtn.textContent = "Copy all"; }, 1500);
+    }
+  });
+  bar.append(copyBtn);
+
+  if (lowCount > 0) {
+    const label = document.createElement("label");
+    label.className = "toggle";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.addEventListener("change", () => {
+      list.classList.toggle("show-low", cb.checked);
+    });
+    const txt = document.createElement("span");
+    txt.textContent = `Show ${lowCount} low-confidence row${lowCount === 1 ? "" : "s"}`;
+    label.append(cb, txt);
+    bar.append(label);
+  }
+
+  return bar;
+}
+
+function buildVlmSection(imageSource) {
+  const hasWebGpu = typeof navigator !== "undefined" && !!navigator.gpu;
+  const device = hasWebGpu ? "webgpu" : "wasm";
+
+  const section = document.createElement("div");
+  section.className = "vlm-section";
+
+  const header = document.createElement("div");
+  header.className = "vlm-header";
+
+  const title = document.createElement("div");
+  title.className = "vlm-title";
+  title.innerHTML =
+    `Photo or scene, not a document?` +
+    `<small>Try a small in-browser VLM for transcription.` +
+    (hasWebGpu ? "" : " (WebGPU unavailable — will run on CPU, slow)") +
+    `</small>`;
+  header.append(title);
+
+  const controls = document.createElement("div");
+  controls.className = "vlm-controls";
+
+  const select = document.createElement("select");
+  select.className = "vlm-select";
+  for (const m of VLM_MODELS) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.label;
+    select.append(opt);
+  }
+  controls.append(select);
+
+  const runBtn = document.createElement("button");
+  runBtn.type = "button";
+  runBtn.className = "btn";
+  runBtn.textContent = "Transcribe with VLM";
+  controls.append(runBtn);
+
+  header.append(controls);
+  section.append(header);
+
+  const status = document.createElement("div");
+  status.className = "vlm-status hidden";
+  section.append(status);
+
+  const output = document.createElement("div");
+  output.className = "vlm-output hidden";
+  const outHeader = document.createElement("div");
+  outHeader.className = "vlm-output-header";
+  const outLabel = document.createElement("span");
+  outLabel.className = "label";
+  outLabel.textContent = "VLM output";
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "btn";
+  copyBtn.textContent = "Copy";
+  outHeader.append(outLabel, copyBtn);
+  const pre = document.createElement("pre");
+  output.append(outHeader, pre);
+  section.append(output);
+
+  const setStat = (msg, kind = "") => {
+    status.className = "vlm-status" + (kind ? " " + kind : "");
+    status.textContent = msg;
+    status.classList.remove("hidden");
+  };
+
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(pre.textContent || "");
+      copyBtn.classList.add("copied");
+      copyBtn.textContent = "Copied";
+      setTimeout(() => {
+        copyBtn.classList.remove("copied");
+        copyBtn.textContent = "Copy";
+      }, 1500);
+    } catch {
+      copyBtn.textContent = "Copy failed";
+      setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
+    }
+  });
+
+  runBtn.addEventListener("click", async () => {
+    const modelCfg = VLM_MODELS.find((m) => m.id === select.value);
+    if (!modelCfg) return;
+    const dtype = device === "webgpu" ? modelCfg.webgpu : modelCfg.wasm;
+
+    runBtn.disabled = true;
+    select.disabled = true;
+    output.classList.add("hidden");
+    pre.textContent = "";
+
+    const onProgress = (e) => {
+      if (e?.status === "progress" && e.file) {
+        const pct = e.progress != null ? ` ${Math.round(e.progress)}%` : "";
+        setStat(`Downloading ${e.file}${pct}`, "working");
+      } else if (e?.status === "done" && e.file) {
+        setStat(`Cached ${e.file}`, "working");
+      } else if (e?.status === "ready") {
+        setStat(`Model ready · running inference…`, "working");
+      } else if (e?.status === "initiate" && e.file) {
+        setStat(`Fetching ${e.file}…`, "working");
+      }
+    };
+
+    const started = performance.now();
+    try {
+      setStat(`Loading ${modelCfg.label} on ${device.toUpperCase()}…`, "working");
+      output.classList.remove("hidden");
+      const text = await vlmTranscribe({
+        imageSource, modelId: modelCfg.id, dtype, device,
+        onProgress,
+        onToken: (partial) => { pre.textContent = partial; },
+      });
+      pre.textContent = text;
+      const secs = ((performance.now() - started) / 1000).toFixed(1);
+      setStat(`Done in ${secs}s on ${device.toUpperCase()}`, "");
+    } catch (err) {
+      console.error(err);
+      setStat(`VLM failed: ${err.message || err}`, "err");
+    } finally {
+      runBtn.disabled = false;
+      select.disabled = false;
+    }
+  });
+
+  return section;
 }
 
 function renderTextCard(file, kindLabel, sections) {
